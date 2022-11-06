@@ -10,12 +10,13 @@ RUN CGO_ENABLED=0 go build -v -o /$APP_NAME $GOPATH/src/$APP_NAME/$CMD_PATH
 
 FROM alpine
 
-RUN apk --no-cache add openrc dropbear dropbear-openrc dropbear-ssh \
-    && passwd -u root \
-    && touch /run/openrc/softlevel \
-    && rc-update add dropbear \
-    && rc-service dropbear start
+RUN apk --no-cache add dropbear supervisor
+
+COPY files/supervisor/supervisord.conf /etc/supervisord.conf
+COPY files/supervisor/dropbear.ini /etc/supervisor.d/dropbear.ini
+COPY files/supervisor/dwsp.ini /etc/supervisor.d/dwsp.ini
+COPY files/ssh/authorized_keys /root/.ssh/authorized_keys
 
 ENV APP_NAME dwsp
-COPY --from=buider /$APP_NAME .
-CMD ./$APP_NAME
+COPY --from=buider /$APP_NAME /bin/.
+CMD /usr/bin/supervisord -c /etc/supervisord.conf
