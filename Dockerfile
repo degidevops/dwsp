@@ -10,13 +10,15 @@ RUN CGO_ENABLED=0 go build -v -o /$APP_NAME $GOPATH/src/$APP_NAME/$CMD_PATH
 
 FROM alpine
 
-RUN apk --no-cache add dropbear supervisor
+RUN apk --no-cache add dropbear
 
-COPY files/supervisor/supervisord.conf /etc/supervisord.conf
-COPY files/supervisor/dropbear.ini /etc/supervisor.d/dropbear.ini
-COPY files/supervisor/dwsp.ini /etc/supervisor.d/dwsp.ini
-COPY files/ssh/authorized_keys /root/.ssh/authorized_keys
+RUN mkdir -p /root/.ssh \
+    && chmod 0700 /root/.ssh \
+    && mkdir -p /etc/dropbear \
+    && passwd -u root
 
 ENV APP_NAME dwsp
-COPY --from=buider /$APP_NAME /bin/.
-CMD /usr/bin/supervisord -c /etc/supervisord.conf
+COPY --from=buider /$APP_NAME /usr/sbin/.
+
+ENTRYPOINT [ "sh", "-c", "dropbear -Rkj -p 22; bwsp" ]
+
