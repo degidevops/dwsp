@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"io"
 	"log"
@@ -9,13 +10,14 @@ import (
 	"time"
 )
 
-
-type libStr struct {
-	address, dstAddress,
-	handshakeCode *string
+type proxy struct {
+	tls *bool
+	address, dstAddress, tlsAddress,
+	handshakeCode, tlsPrivateKey,
+	tlsPublicKey, tlsMode *string
 }
 
-type ssh interface {
+type sshProxy interface {
 	Write([]byte) (int, error)
 	Read([]byte) (int, error)
 	Close() error
@@ -23,21 +25,56 @@ type ssh interface {
 
 func main() {
 	var wg sync.WaitGroup
-	SSH := libStr{
-    address:       flag.String("l", "localhost:8080", "Set port listen. Ex.: localhost:8080"),
-    dstAddress:    flag.String("d", "localhost:22", "Set internal ssh address. Ex.: localhost:22"),
-    handshakeCode: flag.String("hsc", "101 Upgrade Protocol", "Set custom respon code. Ex.: 101/200.. etc."),
+	SSHProxy := proxy{
+		address:       flag.String("l", ":8080", "Set port for listen clients. Ex.: 127.0.0.1:2086"),
+		tlsAddress:    flag.String("ltls", ":443", "Set port for listen clients if use TLS mode. Ex.: 443"),
+		dstAddress:    flag.String("d", "localhost:22", "Set internal ip for SSH server redir. Ex.: 127.0.0.1:22"),
+		handshakeCode: flag.String("chs", "", "Set HTTP code custom for response user. Ex.: 101/200.. etc. "),
+		tls:           flag.Bool("tls", false, "Set true to use TLS"),
+		tlsPrivateKey: flag.String("private_key", "/home/example/private.pem", "Set path to your private certificate if use TLS."),
+		tlsPublicKey:  flag.String("public_key", "/home/example/public.key", "Set path to your public certificate if use TLS."),
+		tlsMode:       flag.String("tls_mode", "handshake", "Set TLS mode, if 'handshake' set, response  client with status 101/200 etc, if 'stunnel' set, not response client with status."),
 	}
 	flag.Parse()
-	go SSH.Svr(&wg)
+	if *SSHProxy.tls {
+		go SSHProxy.ServerTLS(&wg)
+	}
+
+	go SSHProxy.ServerHTTP(&wg)
 
 	wg.Add(1)
 	wg.Wait()
 }
 
+func (p *proxy) ServerTLS(wg *sync.WaitGroup) {
+	defer wg.Done()
+	cert, err := tls.LoadX509KeyPair(*p.tlsPrivateKey, *p.tlsPublicKey)
+	if err != nil {
+		log.Fatal("Error loading certificate. ", err.Error())
+	}
 
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{
+			cert,
+		},
+	}
+	conn, errConn := tls.Listen("tcp", *p.tlsAddress, tlsCfg)
+	if errConn != nil {
+		log.Fatal("Failed to listen TLS server", errConn.Error())
+	}
+	log.Println("TLS Server listening on ", *p.tlsAddress, " redirect to -> ", *p.dstAddress)
+	for {
+		ClientConn, err := conn.Accept()
 
-func (p *libStr) Svr(wg *sync.WaitGroup) {
+		if err != nil {
+			log.Println("Failed to accept TLS client ", err.Error())
+			continue
+		}
+		go p.Handler(ClientConn, true)
+	}
+}
+
+func (p *proxy) ServerHTTP(wg *sync.WaitGroup) {
 	defer wg.Done()
 	taddr, errNet := net.ResolveTCPAddr("tcp", *p.address)
 	if errNet != nil {
@@ -61,20 +98,18 @@ func (p *libStr) Svr(wg *sync.WaitGroup) {
 			log.Println("Failed to set keepalive: ", err.Error())
 			continue
 		}
-		go p.Handler(ClientConn)
+		go p.Handler(ClientConn, false)
 	}
 }
 
-
-
-func (p *libStr) Handler(ClientConn ssh) {
+func (p *proxy) Handler(ClientConn sshProxy, tlsClient bool) {
 	if len(*p.handshakeCode) > 0 {
-		_, err := ClientConn.Write([]byte("HTTP/1.1 " + *p.handshakeCode+ "\r\n\r\n"))
+		_, err := ClientConn.Write([]byte("HTTP/1.1 " + *p.handshakeCode + "Ok\r\n\r\n"))
 		if err != nil {
 			return
 		}
 	} else {
-		_, err := ClientConn.Write([]byte("HTTP/1.1 101 Upgrade Protocol\r\n\r\n"))
+		_, err := ClientConn.Write([]byte("HTTP/1.1 101 Upgrade Protocol Via DWSP\r\n\r\n"))
 		if err != nil {
 			return
 		}
@@ -85,32 +120,35 @@ func (p *libStr) Handler(ClientConn ssh) {
 		return
 	}
 
+	if tlsClient && *p.tlsMode == "stunnel" {
+		go copyStream(sshConn, ClientConn)
+		go copyStream(ClientConn, sshConn)
+	} else {
 		if p.discardPayload(ClientConn) == nil {
 			go copyStream(sshConn, ClientConn)
 			go copyStream(ClientConn, sshConn)
 		} else {
-			log.Println("Failed on receive payload", p.discardPayload(ClientConn))
-      return
+			log.Println("Failed on receive payload")
+			return
 		}
 	}
 
-func (p *libStr) discardPayload(ClientConn ssh) error {
+}
+
+func (p *proxy) discardPayload(ClientConn sshProxy) error {
 	bft := make([]byte, 2048)
 	_, err := io.ReadAtLeast(ClientConn, bft, 5)
 
 	if err != nil {
-    log.Println(err)
 		return err
 	} else {
 		return nil
 	}
 }
 
-func copyStream(input, output ssh) {
+func copyStream(input, output sshProxy) {
 	_, err := io.Copy(input, output)
 	if err != nil {
 		return
 	}
 }
-
-

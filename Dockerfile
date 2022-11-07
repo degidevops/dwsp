@@ -14,11 +14,10 @@ RUN apk --no-cache add dropbear
 
 RUN mkdir -p /root/.ssh \
     && chmod 0700 /root/.ssh \
-    && mkdir -p /etc/dropbear \
-    && passwd -u root
+    && mkdir -p /etc/dropbear
 
 ENV APP_NAME dwsp
-COPY --from=buider /$APP_NAME /usr/sbin/.
+COPY --from=buider /$APP_NAME /usr/sbin/$APP_NAME
 
 ENTRYPOINT [ "sh", "-c", "dropbear -Rkj -p 22; bwsp" ]
 
